@@ -1,0 +1,239 @@
+import { useState, useEffect } from 'react'
+import { motion } from 'framer-motion'
+import { Link } from 'react-router-dom'
+import {
+  Users, Briefcase, FileText, Trophy, TrendingUp,
+  Clock, ArrowRight, Zap, Code2, MessageSquare,
+  CheckCircle, AlertCircle, BarChart3
+} from 'lucide-react'
+import api from '../../services/api'
+
+const StatCard = ({ icon: Icon, label, value, change, color, bg, delay }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+    transition={{ delay }}
+    className="card"
+  >
+    <div className={`w-10 h-10 rounded-xl ${bg} flex items-center justify-center mb-4`}>
+      <Icon className={`w-5 h-5 ${color}`} />
+    </div>
+    <p className="text-2xl font-bold text-white mb-0.5">{value}</p>
+    <p className="text-xs text-slate-400">{label}</p>
+    {change && (
+      <div className="flex items-center gap-1 mt-2">
+        <TrendingUp size={11} className="text-accent-400" />
+        <span className="text-xs text-accent-400">{change}</span>
+      </div>
+    )}
+  </motion.div>
+)
+
+const PipelineBar = ({ label, count, total, color }) => (
+  <div className="flex items-center gap-3">
+    <span className="text-slate-400 text-xs w-20 capitalize">{label}</span>
+    <div className="flex-1 h-2 bg-surface-600 rounded-full overflow-hidden">
+      <motion.div
+        initial={{ width: 0 }} animate={{ width: total > 0 ? `${(count / total) * 100}%` : '0%' }}
+        transition={{ duration: 0.8, ease: 'easeOut' }}
+        className={`h-full ${color} rounded-full`}
+      />
+    </div>
+    <span className="text-white text-xs font-semibold w-5 text-right">{count}</span>
+  </div>
+)
+
+export default function Dashboard() {
+  const [stats, setStats] = useState({
+    jobs: 0, candidates: 0, screened: 0, shortlisted: 0,
+    pipeline: { applied: 0, screening: 0, interview: 0, shortlisted: 0, hired: 0, rejected: 0 }
+  })
+  const [recentCandidates, setRecentCandidates] = useState([])
+  const [recentJobs, setRecentJobs] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const fetchAll = async () => {
+      try {
+        const [candidatesRes, jobsRes] = await Promise.all([
+          api.get('/candidates?limit=50&sort=-createdAt'),
+          api.get('/jobs?limit=5&sort=-createdAt'),
+        ])
+
+        const all = candidatesRes.data.candidates
+        const pipeline = {
+          applied:     all.filter(c => c.status === 'applied').length,
+          screening:   all.filter(c => c.status === 'screening').length,
+          interview:   all.filter(c => c.status === 'interview').length,
+          shortlisted: all.filter(c => c.status === 'shortlisted').length,
+          hired:       all.filter(c => c.status === 'hired').length,
+          rejected:    all.filter(c => c.status === 'rejected').length,
+        }
+        setStats({
+          jobs:        jobsRes.data.total || 0,
+          candidates:  candidatesRes.data.total || 0,
+          screened:    all.filter(c => c.resumeScore > 0).length,
+          shortlisted: pipeline.shortlisted + pipeline.hired,
+          pipeline,
+        })
+        setRecentCandidates(all.slice(0, 6))
+        setRecentJobs(jobsRes.data.jobs)
+      } catch { /* graceful degradation */ }
+      finally { setLoading(false) }
+    }
+    fetchAll()
+  }, [])
+
+  const statCards = [
+    { icon: Briefcase,  label: 'Active Jobs',       value: stats.jobs,        change: 'Live postings',   color: 'text-blue-400',    bg: 'bg-blue-500/10',    delay: 0 },
+    { icon: Users,      label: 'Total Candidates',  value: stats.candidates,  change: 'All time',        color: 'text-purple-400',  bg: 'bg-purple-500/10',  delay: 0.08 },
+    { icon: FileText,   label: 'Resumes Screened',  value: stats.screened,    change: 'By Groq AI',      color: 'text-emerald-400', bg: 'bg-emerald-500/10', delay: 0.16 },
+    { icon: Trophy,     label: 'Shortlisted',       value: stats.shortlisted, change: 'Ready to hire',   color: 'text-amber-400',   bg: 'bg-amber-500/10',   delay: 0.24 },
+  ]
+
+  const pipelineConfig = [
+    { label: 'Applied',     key: 'applied',     color: 'bg-slate-500' },
+    { label: 'Screening',   key: 'screening',   color: 'bg-amber-500' },
+    { label: 'Interview',   key: 'interview',   color: 'bg-primary-500' },
+    { label: 'Shortlisted', key: 'shortlisted', color: 'bg-emerald-500' },
+    { label: 'Hired',       key: 'hired',       color: 'bg-teal-400' },
+  ]
+  const totalPipeline = Object.values(stats.pipeline).reduce((a, b) => a + b, 0)
+
+  const statusBadge = {
+    applied:     'badge',
+    screening:   'badge-warning',
+    interview:   'badge-primary',
+    shortlisted: 'badge-success',
+    hired:       'badge bg-teal-400/15 text-teal-200 border-teal-400/30',
+    rejected:    'badge-danger',
+  }
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      {/* Stats Row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {statCards.map(s => <StatCard key={s.label} {...s} />)}
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-5">
+        {/* Pipeline */}
+        <div className="card lg:col-span-1">
+          <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+            <BarChart3 size={16} className="text-primary-400" /> Hiring Pipeline
+          </h3>
+          <div className="space-y-3">
+            {pipelineConfig.map(p => (
+              <PipelineBar key={p.key}
+                label={p.label}
+                count={stats.pipeline[p.key] || 0}
+                total={totalPipeline}
+                color={p.color}
+              />
+            ))}
+          </div>
+          <div className="mt-4 pt-4 border-t border-white/[0.07]">
+            <p className="text-slate-500 text-xs">
+              {stats.pipeline.rejected} rejected · {totalPipeline} total
+            </p>
+          </div>
+        </div>
+
+        {/* Recent Candidates */}
+        <div className="card lg:col-span-2">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-white flex items-center gap-2">
+              <Clock size={16} className="text-primary-400" /> Recent Candidates
+            </h3>
+            <Link to="/candidates" className="btn-ghost text-xs gap-1">
+              View all <ArrowRight size={12} />
+            </Link>
+          </div>
+          {loading ? (
+            <div className="space-y-3">
+              {[...Array(4)].map((_, i) => <div key={i} className="h-12 bg-surface-700 rounded-xl animate-pulse" />)}
+            </div>
+          ) : recentCandidates.length === 0 ? (
+            <div className="text-center py-8 text-slate-400 text-sm">
+              No candidates yet. <Link to="/resume-ai" className="text-primary-400">Screen resumes</Link> to get started.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {recentCandidates.map((c, i) => (
+                <motion.div key={c._id}
+                  initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.05 }}
+                  className="flex items-center justify-between py-2 border-b border-white/[0.05] last:border-0"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500/30 to-accent-500/30 border border-primary-500/20 flex items-center justify-center text-primary-300 font-semibold text-xs flex-shrink-0">
+                      {c.name[0]}
+                    </div>
+                    <div>
+                      <p className="text-white text-sm font-medium">{c.name}</p>
+                      <p className="text-slate-500 text-xs">{c.currentRole || c.email}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right hidden sm:block">
+                      <p className="text-white text-sm font-bold">{c.totalScore}<span className="text-slate-500 font-normal text-xs">/100</span></p>
+                    </div>
+                    <span className={`${statusBadge[c.status] || 'badge'} badge capitalize text-xs`}>{c.status}</span>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Quick Actions */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { icon: Zap,          label: 'Screen Resume', link: '/resume-ai',  cls: 'from-primary-600 to-indigo-700' },
+          { icon: Code2,        label: 'Coding IDE',    link: '/coding',     cls: 'from-purple-600 to-pink-700' },
+          { icon: MessageSquare,label: 'AI Interview',  link: '/interview',  cls: 'from-emerald-600 to-teal-700' },
+          { icon: Trophy,       label: 'Rankings',      link: '/ranking',    cls: 'from-amber-600 to-orange-700' },
+        ].map(a => (
+          <Link key={a.label} to={a.link}
+            className={`card group flex items-center gap-3 bg-gradient-to-br ${a.cls} border-0 hover:scale-[1.02] transition-transform duration-200`}>
+            <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
+              <a.icon className="w-5 h-5 text-white" />
+            </div>
+            <span className="text-white font-semibold text-sm">{a.label}</span>
+            <ArrowRight size={15} className="text-white/60 ml-auto group-hover:translate-x-1 transition-transform" />
+          </Link>
+        ))}
+      </div>
+
+      {/* Recent Jobs */}
+      {recentJobs.length > 0 && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-white flex items-center gap-2">
+              <Briefcase size={16} className="text-primary-400" /> Active Job Postings
+            </h3>
+            <Link to="/jobs" className="btn-ghost text-xs gap-1">
+              Manage <ArrowRight size={12} />
+            </Link>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {recentJobs.map(j => (
+              <div key={j._id} className="bg-surface-700 rounded-xl p-3 border border-white/[0.06]">
+                <div className="flex items-start justify-between mb-2">
+                  <p className="text-white text-sm font-medium line-clamp-1">{j.title}</p>
+                  <span className={`${j.status === 'active' ? 'badge-success' : 'badge-warning'} badge text-[10px] ml-2 flex-shrink-0`}>
+                    {j.status}
+                  </span>
+                </div>
+                <p className="text-slate-400 text-xs mb-2">{j.company}</p>
+                <div className="flex items-center gap-2 text-slate-500 text-xs">
+                  <Users size={11} /> {j.applicantCount} applicants
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
