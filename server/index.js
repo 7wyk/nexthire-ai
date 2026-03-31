@@ -9,23 +9,23 @@ import rateLimit from 'express-rate-limit'
 
 import connectDB from './config/db.js'
 import logger from './config/logger.js'
-import { registerInterviewSockets }    from './sockets/interview.socket.js'
+import { registerInterviewSockets } from './sockets/interview.socket.js'
 import { registerNotificationSockets } from './sockets/notification.socket.js'
 
 // Route imports
-import authRoutes        from './routes/auth.routes.js'
-import candidateRoutes  from './routes/candidate.routes.js'
-import jobRoutes        from './routes/job.routes.js'
+import authRoutes from './routes/auth.routes.js'
+import candidateRoutes from './routes/candidate.routes.js'
+import jobRoutes from './routes/job.routes.js'
 import applicationRoutes from './routes/application.routes.js'
-import resumeRoutes     from './routes/resume.routes.js'
-import codeRoutes       from './routes/code.routes.js'
-import interviewRoutes  from './routes/interview.routes.js'
-import aiRoutes         from './routes/ai.routes.js'
-import uploadRoutes     from './routes/upload.routes.js'
+import resumeRoutes from './routes/resume.routes.js'
+import codeRoutes from './routes/code.routes.js'
+import interviewRoutes from './routes/interview.routes.js'
+import aiRoutes from './routes/ai.routes.js'
+import uploadRoutes from './routes/upload.routes.js'
 
 
 // ── App bootstrap ──────────────────────────────────────────────────────────
-const app        = express()
+const app = express()
 const httpServer = createServer(app)
 
 const CLIENT_ORIGIN = process.env.CLIENT_URL || 'http://localhost:5173'
@@ -42,7 +42,7 @@ app.set('io', io)
 // Register namespaced socket handlers
 registerInterviewSockets(io)
 const { pushToUser, broadcastToRecruiters } = registerNotificationSockets(io)
-app.set('pushToUser',            pushToUser)
+app.set('pushToUser', pushToUser)
 app.set('broadcastToRecruiters', broadcastToRecruiters)
 
 // ── Database ───────────────────────────────────────────────────────────────
@@ -53,24 +53,24 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }))
 app.use(cors({
-  origin:      CLIENT_ORIGIN,
+  origin: CLIENT_ORIGIN,
   credentials: true,
-  methods:     ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }))
 
 // Global rate limiter (200 req / 15 min per IP)
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
-  max:      200,
+  max: 200,
   standardHeaders: true,
-  legacyHeaders:   false,
+  legacyHeaders: false,
   message: { message: 'Too many requests — slow down.' },
 }))
 
 // Stricter limiter for auth endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max:      20,
+  max: 20,
   message: { message: 'Too many auth attempts. Try again later.' },
 })
 
@@ -88,24 +88,24 @@ app.use((req, _res, next) => {
 })
 
 // ── API Routes ─────────────────────────────────────────────────────────────
-app.use('/api/auth',         authLimiter, authRoutes)
-app.use('/api/candidates',   candidateRoutes)
-app.use('/api/jobs',         jobRoutes)
+app.use('/api/auth', authLimiter, authRoutes)
+app.use('/api/candidates', candidateRoutes)
+app.use('/api/jobs', jobRoutes)
 app.use('/api/applications', applicationRoutes)
-app.use('/api/resume',       resumeRoutes)
-app.use('/api/code',         codeRoutes)
-app.use('/api/interview',    interviewRoutes)
-app.use('/api/ai',           aiRoutes)
-app.use('/api/upload',       uploadRoutes)
+app.use('/api/resume', resumeRoutes)
+app.use('/api/code', codeRoutes)
+app.use('/api/interview', interviewRoutes)
+app.use('/api/ai', aiRoutes)
+app.use('/api/upload', uploadRoutes)
 
 // ── Health Check ───────────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
   res.json({
-    status:    'ok',
+    status: 'ok',
     timestamp: new Date().toISOString(),
-    service:   'NextHire AI API',
-    version:   process.env.npm_package_version || '1.0.0',
-    env:       process.env.NODE_ENV || 'development',
+    service: 'NextHire AI API',
+    version: process.env.npm_package_version || '1.0.0',
+    env: process.env.NODE_ENV || 'development',
   })
 })
 
@@ -117,11 +117,11 @@ app.use((_req, res) => {
 // ── Global Error Handler ───────────────────────────────────────────────────
 app.use((err, req, res, _next) => {
   logger.error('[Unhandled Error]', {
-    message:   err.message,
-    stack:     err.stack,
+    message: err.message,
+    stack: err.stack,
     requestId: req.requestId,
-    path:      req.path,
-    method:    req.method,
+    path: req.path,
+    method: req.method,
   })
   res.status(err.status || 500).json({
     message: err.message || 'Internal Server Error',
@@ -133,11 +133,11 @@ app.use((err, req, res, _next) => {
 // ── Start Server ───────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, '0.0.0.0', () => {
   logger.info(`🚀 NextHire AI Server started`, {
     port: PORT,
-    env:  process.env.NODE_ENV || 'development',
-    url:  `http://localhost:${PORT}`,
+    env: process.env.NODE_ENV || 'development',
+    url: `http://0.0.0.0:${PORT}`,
   })
 })
 
