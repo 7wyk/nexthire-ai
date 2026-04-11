@@ -400,7 +400,7 @@ export default function CodingPage() {
 
                   {/* Test cases */}
                   <div className="space-y-2">
-                    {submitResult.results.map((r, i) => (
+                    {(submitResult.testResults || []).map((r, i) => (
                       <div key={i} className={`rounded-xl p-3 border text-xs
                         ${r.passed ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
                         <div className="flex items-center gap-2 mb-1">
@@ -437,7 +437,7 @@ export default function CodingPage() {
           {/* ── AI Evaluation ── */}
           {activeTab === 'ai' && (
             <div className="p-4 space-y-4">
-              {submitResult?.aiEval ? (
+              {submitResult?.aiEval && submitResult.aiEval.score != null ? (
                 <>
                   <div className="flex items-center justify-between">
                     <p className="text-slate-300 text-xs font-semibold uppercase tracking-wider">AI Code Review</p>

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Upload, FileText, Zap, CheckCircle, XCircle, AlertCircle,
   ChevronDown, Brain, Target, TrendingUp, Award, RefreshCw,
-  User, Mail, Briefcase
+  User, Mail, Briefcase, Users, Loader2
 } from 'lucide-react'
 import api from '../../services/api'
 import toast from 'react-hot-toast'
@@ -43,12 +43,22 @@ export default function ResumePage() {
   const [loading, setLoading]           = useState(false)
   const [result, setResult]             = useState(null)
   const [history, setHistory]           = useState([])
+  const [applicants, setApplicants]     = useState([])
+  const [screeningId, setScreeningId]   = useState(null) // appId being screened
   const fileRef = useRef()
 
   useEffect(() => {
     api.get('/jobs?status=active').then(r => setJobs(r.data.jobs)).catch(() => {})
     api.get('/resume/history').then(r => setHistory(r.data.candidates)).catch(() => {})
   }, [])
+
+  // Fetch applicants with resumes when job changes
+  useEffect(() => {
+    if (!selectedJob) { setApplicants([]); return }
+    api.get(`/applications/job/${selectedJob}?limit=50`)
+      .then(r => setApplicants(r.data.applications || []))
+      .catch(() => setApplicants([]))
+  }, [selectedJob])
 
   const handleDrop = (e) => {
     e.preventDefault(); setDragging(false)
@@ -84,6 +94,23 @@ export default function ResumePage() {
     }
   }
 
+  // Auto-screen from application (no re-upload)
+  const handleAutoScreen = async (applicationId) => {
+    setScreeningId(applicationId)
+    setResult(null)
+    try {
+      const { data } = await api.post('/resume/screen-application', { applicationId })
+      setResult(data)
+      toast.success(`Screened! Score: ${data.aiResult.score}/100`)
+      const hist = await api.get('/resume/history')
+      setHistory(hist.data.candidates)
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Screening failed')
+    } finally {
+      setScreeningId(null)
+    }
+  }
+
   const rec = result && recommendationConfig[result.aiResult?.recommendation]
 
   return (
@@ -98,7 +125,7 @@ export default function ResumePage() {
             </div>
             <div>
               <h2 className="font-semibold text-white">AI Resume Screener</h2>
-              <p className="text-slate-400 text-xs">Powered by Groq LLM + Pinecone</p>
+              <p className="text-slate-400 text-xs">Upload manually or auto-screen from applicants</p>
             </div>
           </div>
 
@@ -183,6 +210,52 @@ export default function ResumePage() {
             </button>
           </form>
         </div>
+
+        {/* === Applicants with Resumes (Auto-Screen) === */}
+        {selectedJob && applicants.length > 0 && (
+          <div className="card space-y-3 lg:col-span-2 xl:col-span-1">
+            <div className="flex items-center gap-2 mb-1">
+              <Users size={16} className="text-primary-400" />
+              <h3 className="font-semibold text-white text-sm">Applicants with Resumes</h3>
+              <span className="text-slate-500 text-xs ml-auto">{applicants.filter(a => a.resumeUrl).length} with resume</span>
+            </div>
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+              {applicants.map(app => {
+                const hasResume = !!app.resumeUrl
+                const name = app.candidate?.name || 'Unknown'
+                return (
+                  <div key={app._id} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all
+                    ${hasResume ? 'border-white/[0.07] hover:border-primary-500/30 bg-surface-700/50' : 'border-white/[0.04] bg-surface-800/50 opacity-50'}`}>
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary-600/30 to-accent-500/30 flex items-center justify-center text-primary-300 text-xs font-bold flex-shrink-0">
+                      {name[0]?.toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white text-sm font-medium truncate">{name}</p>
+                      <p className="text-slate-500 text-xs">{app.candidate?.email}</p>
+                    </div>
+                    {hasResume ? (
+                      <button
+                        onClick={() => handleAutoScreen(app._id)}
+                        disabled={screeningId === app._id}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+                          bg-primary-500/15 text-primary-400 border border-primary-500/20
+                          hover:bg-primary-500/25 disabled:opacity-50 transition-all flex-shrink-0"
+                      >
+                        {screeningId === app._id ? (
+                          <><Loader2 size={12} className="animate-spin" /> Screening…</>
+                        ) : (
+                          <><Zap size={12} /> Screen</>
+                        )}
+                      </button>
+                    ) : (
+                      <span className="text-slate-600 text-xs">No resume</span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* === Results Panel === */}
         <AnimatePresence mode="wait">

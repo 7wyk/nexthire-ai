@@ -13,6 +13,18 @@ const testResultSchema = new mongoose.Schema(
   { _id: false }
 )
 
+const aiFeedbackSchema = new mongoose.Schema(
+  {
+    codeQuality:     { type: String },              // 'poor' | 'fair' | 'good' | 'excellent'
+    timeComplexity:  { type: String },              // e.g. 'O(n)'
+    spaceComplexity: { type: String },              // e.g. 'O(1)'
+    feedback:        { type: String },              // narrative explanation
+    improvements:    [{ type: String }],            // list of suggestions
+    score:           { type: Number, default: 0 },  // 0-100
+  },
+  { _id: false }
+)
+
 const submissionSchema = new mongoose.Schema(
   {
     // Who submitted
@@ -23,7 +35,7 @@ const submissionSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Which problem
+    // Which standalone problem (optional)
     problemId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Problem',
@@ -31,7 +43,7 @@ const submissionSchema = new mongoose.Schema(
     },
     problemSlug: { type: String },
 
-    // Optional: linked to a job application context
+    // Linked to a job's coding test
     jobId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Job',
@@ -65,8 +77,11 @@ const submissionSchema = new mongoose.Schema(
     total:    { type: Number, default: 0 },
     passRate: { type: Number, default: 0 },   // 0–100
 
-    // Per-test details (hidden ones are scrubbed before response)
+    // Per-test details
     testResults: [testResultSchema],
+
+    // AI code quality feedback
+    aiFeedback: aiFeedbackSchema,
 
     // Execution metadata
     time:   { type: String },
@@ -75,7 +90,9 @@ const submissionSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
-// Compound index for fetching "submissions by user for a problem"
+// Fast lookup: all submissions by a user for a specific job test
+submissionSchema.index({ userId: 1, jobId: 1, createdAt: -1 })
+// Standalone problem submissions
 submissionSchema.index({ userId: 1, problemId: 1, createdAt: -1 })
 
 export default mongoose.model('Submission', submissionSchema)

@@ -1,13 +1,21 @@
 import Application from '../models/Application.js'
 import Job from '../models/Job.js'
+import { extractTextFromFile } from '../services/parser.service.js'
+import { uploadFile } from '../services/cloudinary.service.js'
+import fs from 'fs'
+import logger from '../config/logger.js'
 
 // ─── CANDIDATE ──────────────────────────────────────────────────────────────
 
 /**
  * POST /api/applications
  * Candidate applies to a job.
+ * Accepts multipart/form-data with optional resume file.
+ * Fields: jobId, coverLetter (optional), resume (file, optional)
  */
 export const applyToJob = async (req, res) => {
+  const filePath = req.file?.path
+
   try {
     const { jobId, coverLetter } = req.body
 
@@ -19,19 +27,84 @@ export const applyToJob = async (req, res) => {
     if (!job)
       return res.status(404).json({ message: 'Job not found or no longer active' })
 
-    // Create application (unique index will reject duplicates)
+    // ── Process resume if uploaded ────────────────────────────────────────
+    let resumeUrl      = null
+    let resumePublicId = null
+    let resumeText     = null
+
+    if (req.file) {
+      // 1. Extract text from PDF/DOC/TXT
+      try {
+        resumeText = await extractTextFromFile(filePath)
+        if (resumeText) resumeText = resumeText.substring(0, 10000) // cap at 10k chars
+        logger.info('[Application] Resume text extracted', {
+          length: resumeText?.length || 0,
+          file:   req.file.originalname,
+        })
+      } catch (parseErr) {
+        logger.warn('[Application] Resume text extraction failed', { error: parseErr.message })
+        // Continue without text — file is still uploaded
+      }
+
+      // 2. Upload to Cloudinary (or local fallback)
+      try {
+        const uploaded = await uploadFile(filePath, 'resumes')
+        resumeUrl      = uploaded.url
+        resumePublicId = uploaded.publicId
+      } catch (uploadErr) {
+        logger.warn('[Application] Cloudinary upload failed, using local', { error: uploadErr.message })
+        // Fallback: serve from local uploads
+        resumeUrl = `/uploads/resumes/${req.file.filename}`
+        resumePublicId = req.file.filename
+      }
+
+      // 3. Clean up temp file (if Cloudinary handled it)
+      if (filePath && fs.existsSync(filePath) && resumeUrl?.startsWith('http')) {
+        fs.unlinkSync(filePath)
+      }
+    }
+
+    // ── Create application ───────────────────────────────────────────────
     const application = await Application.create({
       job: jobId,
       candidate: req.user._id,
       coverLetter,
+      resumeUrl,
+      resumePublicId,
+      resumeText,
     })
 
     // Increment job applicant counter
     await Job.findByIdAndUpdate(jobId, { $inc: { applicantCount: 1 } })
 
     const populated = await application.populate('job', 'title company location')
+
+    // Real-time notification to recruiter (non-blocking)
+    try {
+      const pushToUser = req.app.get('pushToUser')
+      pushToUser?.(String(job.recruiter), 'new-application', {
+        candidateId:   req.user._id,
+        candidateName: req.user.name,
+        jobId,
+        jobTitle:      job.title,
+        hasResume:     !!resumeUrl,
+      })
+    } catch { /* non-blocking */ }
+
+    logger.info('[Application] Created', {
+      applicationId: application._id,
+      candidate:     req.user.name,
+      job:           job.title,
+      hasResume:     !!resumeUrl,
+      resumeTextLen: resumeText?.length || 0,
+    })
+
     res.status(201).json({ application: populated })
   } catch (err) {
+    // Clean up temp file on error
+    if (filePath && fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath) } catch { /* ignore */ }
+    }
     // Mongoose duplicate key error
     if (err.code === 11000)
       return res.status(409).json({ message: 'You have already applied to this job' })
@@ -53,6 +126,7 @@ export const getMyApplications = async (req, res) => {
     const [applications, total] = await Promise.all([
       Application.find(filter)
         .populate('job', 'title company location type status')
+        .select('-resumeText')   // don't send full text to candidate list view
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(Number(limit)),
@@ -101,6 +175,7 @@ export const withdrawApplication = async (req, res) => {
 /**
  * GET /api/applications/job/:jobId
  * Recruiter views all applicants for one of their jobs.
+ * Includes resume indicators.
  */
 export const getApplicantsByJob = async (req, res) => {
   try {
@@ -118,6 +193,7 @@ export const getApplicantsByJob = async (req, res) => {
     const [applications, total] = await Promise.all([
       Application.find(filter)
         .populate('candidate', 'name email avatar')
+        .select('-resumeText')   // don't send full text in list view
         .sort(sort)
         .skip(skip)
         .limit(Number(limit)),
@@ -130,6 +206,42 @@ export const getApplicantsByJob = async (req, res) => {
       total,
       page: Number(page),
       pages: Math.ceil(total / Number(limit)),
+    })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+}
+
+/**
+ * GET /api/applications/:id/resume
+ * Recruiter fetches full resume data for a specific application (for AI screening).
+ */
+export const getApplicationResume = async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.id)
+      .populate('candidate', 'name email')
+      .populate('job', 'title company description skills recruiter')
+
+    if (!application)
+      return res.status(404).json({ message: 'Application not found' })
+
+    // Verify recruiter owns this job
+    if (String(application.job.recruiter) !== String(req.user._id))
+      return res.status(403).json({ message: 'Access denied' })
+
+    if (!application.resumeText && !application.resumeUrl) {
+      return res.status(404).json({ message: 'No resume found for this application' })
+    }
+
+    res.json({
+      application: {
+        _id:            application._id,
+        candidate:      application.candidate,
+        job:            application.job,
+        resumeUrl:      application.resumeUrl,
+        resumeText:     application.resumeText,
+        status:         application.status,
+      },
     })
   } catch (err) {
     res.status(500).json({ message: err.message })

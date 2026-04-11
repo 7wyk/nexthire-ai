@@ -25,7 +25,7 @@ const userSchema = new mongoose.Schema({
   role: {
     type: String,
     enum: ['recruiter', 'admin', 'candidate'],
-    default: 'recruiter',
+    default: 'candidate',
   },
   avatar:       { type: String },
   company:      { type: String },
@@ -38,6 +38,14 @@ const userSchema = new mongoose.Schema({
   lastLogin:      { type: Date },
   loginAttempts:  { type: Number, default: 0 },
   lockUntil:      { type: Date },
+
+  // Email verification
+  isEmailVerified: { type: Boolean, default: false },
+  verifyToken:     { type: String, select: false },
+
+  // Password reset
+  resetToken:       { type: String,  select: false },
+  resetTokenExpiry: { type: Date,    select: false },
 }, { timestamps: true })
 
 // Virtual: is account currently locked?

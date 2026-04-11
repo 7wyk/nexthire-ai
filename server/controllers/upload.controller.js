@@ -1,5 +1,5 @@
 import fs from 'fs'
-import { uploadToS3, getSignedDownloadUrl } from '../services/aws.service.js'
+import { uploadFile, getFileUrl } from '../services/cloudinary.service.js'
 import Candidate from '../models/Candidate.js'
 import logger from '../config/logger.js'
 
@@ -11,7 +11,7 @@ import logger from '../config/logger.js'
 //   candidateId  – link uploaded file to an existing Candidate document
 //
 // Returns:
-//   { key, url, signedUrl, candidateId? }
+//   { publicId, url, candidateId? }
 // ─────────────────────────────────────────────────────────────────────────────
 export const uploadResume = async (req, res) => {
   const filePath = req.file?.path
@@ -21,44 +21,35 @@ export const uploadResume = async (req, res) => {
       return res.status(400).json({ message: 'Resume file is required (PDF, DOC, DOCX or TXT)' })
     }
 
-    // 1. Upload to S3 (private object — access via signed URL)
-    const { key, url } = await uploadToS3({
-      source:   filePath,
-      filename: req.file.originalname,
-      folder:   'resumes',
-      isPublic: false,          // private bucket — use signed URLs for access
-    })
+    // 1. Upload to Cloudinary (or local fallback)
+    const { publicId, url } = await uploadFile(filePath, 'resumes')
 
-    // 2. Generate a short-lived signed URL (1 hour) for immediate preview
-    const signedUrl = await getSignedDownloadUrl(key, 3600)
-
-    // 3. If a candidateId was provided, persist the S3 key + signed URL
+    // 2. If a candidateId was provided, persist the URL
     let candidate = null
     if (req.body.candidateId) {
       candidate = await Candidate.findByIdAndUpdate(
         req.body.candidateId,
         {
-          resumeUrl: signedUrl,   // store signed URL (refreshable via key)
-          resumeS3Key: key,       // store raw key for future signed URL generation
+          resumeUrl:      url,
+          resumePublicId: publicId,
         },
-        { new: true, select: '_id name email resumeUrl resumeS3Key' },
+        { new: true, select: '_id name email resumeUrl resumePublicId' },
       )
     }
 
-    // 4. Clean up temp file from disk
+    // 3. Clean up temp file from disk
     if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath)
 
-    logger.info('[Upload] Resume uploaded to S3', {
-      key,
+    logger.info('[Upload] Resume uploaded', {
+      publicId,
       uploadedBy: req.user._id,
       candidateId: req.body.candidateId || null,
     })
 
     return res.status(201).json({
-      message:     'Resume uploaded successfully',
-      key,          // S3 object key — save this to regenerate signed URLs
-      url,          // public URL (empty string if bucket is private)
-      signedUrl,    // pre-signed URL, valid for 1 hour
+      message:  'Resume uploaded successfully',
+      publicId,
+      url,
       ...(candidate && { candidate }),
     })
   } catch (err) {
@@ -69,31 +60,33 @@ export const uploadResume = async (req, res) => {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/upload/resume/:candidateId/signed-url
-// Regenerate a fresh signed download URL for a candidate's resume.
-// Returns: { signedUrl }
+// GET /api/upload/resume/:candidateId/url
+// Get the resume URL for a candidate.
+// Returns: { url }
 // ─────────────────────────────────────────────────────────────────────────────
-export const getResumeSignedUrl = async (req, res) => {
+export const getResumeUrl = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.candidateId)
-      .select('resumeS3Key name')
+      .select('resumePublicId resumeUrl name')
 
     if (!candidate) {
       return res.status(404).json({ message: 'Candidate not found' })
     }
-    if (!candidate.resumeS3Key) {
+    if (!candidate.resumeUrl && !candidate.resumePublicId) {
       return res.status(404).json({ message: 'No resume found for this candidate' })
     }
 
-    const signedUrl = await getSignedDownloadUrl(candidate.resumeS3Key, 3600)
+    // If stored as Cloudinary publicId, regenerate URL; otherwise return stored URL
+    const url = candidate.resumePublicId
+      ? getFileUrl(candidate.resumePublicId)
+      : candidate.resumeUrl
 
     return res.json({
-      signedUrl,
-      expiresIn: 3600,
+      url,
       candidate: candidate.name,
     })
   } catch (err) {
-    logger.error('[Upload] Signed URL generation failed', { error: err.message })
+    logger.error('[Upload] URL generation failed', { error: err.message })
     return res.status(500).json({ message: err.message })
   }
 }

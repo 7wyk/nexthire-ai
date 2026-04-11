@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useNavigate } from 'react-router-dom'
 import {
   Plus, Search, Briefcase, MapPin, Clock, Users,
-  Pencil, Trash2, X, ChevronDown
+  Pencil, Trash2, X, ChevronDown, ArrowRight
 } from 'lucide-react'
 import api from '../../services/api'
 import toast from 'react-hot-toast'
@@ -26,6 +27,7 @@ const EMPTY_FORM = {
 }
 
 export default function JobsPage() {
+  const navigate = useNavigate()
   const [jobs, setJobs]       = useState([])
   const [total, setTotal]     = useState(0)
   const [loading, setLoading] = useState(true)
@@ -207,7 +209,28 @@ export default function JobsPage() {
                 </div>
               )}
 
-              <div className="flex gap-2 pt-3 border-t border-white/[0.06] opacity-0 group-hover:opacity-100 transition-opacity">
+              {/* View Applicants — always visible */}
+              <button
+                id={`view-applicants-${job._id}`}
+                onClick={() => navigate(`/jobs/${job._id}/applicants`)}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-xl
+                  bg-primary-500/10 border border-primary-500/20 text-primary-300
+                  hover:bg-primary-500/20 transition-all text-xs font-medium mt-3"
+              >
+                <span className="flex items-center gap-1.5">
+                  <Users size={13} />
+                  View Applicants
+                  {job.applicantCount > 0 && (
+                    <span className="bg-primary-500/30 text-primary-200 px-1.5 py-0.5 rounded-full text-[10px] font-bold">
+                      {job.applicantCount}
+                    </span>
+                  )}
+                </span>
+                <ArrowRight size={13} />
+              </button>
+
+              {/* Edit / Delete — hover only */}
+              <div className="flex gap-2 pt-2 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
                   onClick={() => openEdit(job)}
                   className="btn-ghost text-xs gap-1.5 flex-1 justify-center"

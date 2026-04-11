@@ -56,6 +56,7 @@ export default function InterviewPage() {
     if (!newForm.candidateId || !newForm.jobId) return toast.error('Select a candidate and job')
     setCreating(true)
     try {
+      console.log('[InterviewPage] Starting session:', { candidateId: newForm.candidateId, jobId: newForm.jobId })
       const { data } = await api.post('/interview/sessions', newForm)
       setSessions(prev => [data.session, ...prev])
       setActiveSession(data.session)

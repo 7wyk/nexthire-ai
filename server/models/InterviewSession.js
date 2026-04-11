@@ -11,7 +11,7 @@ const messageSchema = new mongoose.Schema({
 })
 
 const interviewSessionSchema = new mongoose.Schema({
-  candidate:   { type: mongoose.Schema.Types.ObjectId, ref: 'Candidate', required: true },
+  candidate:   { type: mongoose.Schema.Types.ObjectId, ref: 'User',      required: true },
   job:         { type: mongoose.Schema.Types.ObjectId, ref: 'Job',       required: true },
   recruiter:   { type: mongoose.Schema.Types.ObjectId, ref: 'User',      required: true },
   jobTitle:    { type: String },

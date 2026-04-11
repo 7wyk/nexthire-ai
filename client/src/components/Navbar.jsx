@@ -1,20 +1,31 @@
-import { Bell, Search } from 'lucide-react'
+import { Search, LogOut } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { disconnectSocket } from '../services/socket'
+import NotificationBell from './NotificationBell'
 
 const pageTitles = {
-  '/dashboard':  'Dashboard',
-  '/jobs':       'Job Listings',
-  '/candidates': 'Candidates',
-  '/resume-ai':  'Resume AI Screening',
-  '/coding':     'Coding Assessment',
-  '/interview':  'AI Interview',
-  '/ranking':    'Candidate Rankings',
+  '/dashboard':        'Dashboard',
+  '/jobs':             'Job Listings',
+  '/candidates':       'Candidates',
+  '/resume-ai':        'Resume AI Screening',
+  '/coding':           'Coding Assessment',
+  '/interview':        'AI Interview',
+  '/ranking':          'Candidate Rankings',
+  '/my-applications':  'My Applications',
+  '/public-jobs':      'Browse Jobs',
 }
 
 export default function Navbar() {
-  const { user } = useAuthStore()
-  const { pathname } = useLocation()
+  const { user, logout } = useAuthStore()
+  const { pathname }     = useLocation()
+  const navigate         = useNavigate()
+
+  const handleLogout = () => {
+    disconnectSocket()   // cleanly close Socket.IO connection
+    logout()
+    navigate('/login')
+  }
 
   return (
     <header className="h-16 flex items-center justify-between px-6 bg-surface-800/80 backdrop-blur-sm border-b border-white/[0.07] flex-shrink-0">
@@ -29,20 +40,39 @@ export default function Navbar() {
           <input
             type="text"
             placeholder="Search..."
-            className="pl-9 pr-4 py-2 rounded-xl bg-surface-700 border border-white/10 text-slate-300 placeholder-slate-500 text-sm focus:outline-none focus:border-primary-500/40 w-52 transition-all"
+            className="pl-9 pr-4 py-2 rounded-xl bg-surface-700 border border-white/10
+              text-slate-300 placeholder-slate-500 text-sm focus:outline-none
+              focus:border-primary-500/40 w-52 transition-all"
           />
         </div>
 
-        {/* Notifications */}
-        <button className="relative w-9 h-9 flex items-center justify-center rounded-xl bg-surface-700 border border-white/10 text-slate-400 hover:text-white hover:border-primary-500/30 transition-all">
-          <Bell size={17} />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-primary-500" />
-        </button>
+        {/* Notification Bell — recruiters only */}
+        {(user?.role === 'recruiter' || user?.role === 'admin') && (
+          <NotificationBell />
+        )}
 
-        {/* Avatar */}
-        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center text-white text-sm font-bold cursor-pointer">
-          {user?.name?.[0]?.toUpperCase() || 'U'}
+        {/* Avatar + name */}
+        <div className="flex items-center gap-2">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500
+            flex items-center justify-center text-white text-sm font-bold cursor-pointer">
+            {user?.name?.[0]?.toUpperCase() || 'U'}
+          </div>
+          <span className="hidden md:block text-slate-300 text-sm font-medium max-w-[100px] truncate">
+            {user?.name}
+          </span>
         </div>
+
+        {/* Logout */}
+        <button
+          id="logout-btn"
+          onClick={handleLogout}
+          title="Logout"
+          className="w-9 h-9 flex items-center justify-center rounded-xl
+            bg-surface-700 border border-white/[0.07] text-slate-400
+            hover:text-red-400 hover:border-red-500/30 hover:bg-red-500/5 transition-all"
+        >
+          <LogOut size={15} />
+        </button>
       </div>
     </header>
   )

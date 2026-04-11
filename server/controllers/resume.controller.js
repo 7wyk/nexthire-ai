@@ -1,14 +1,16 @@
 import Candidate from '../models/Candidate.js'
+import Application from '../models/Application.js'
 import Job from '../models/Job.js'
 import { extractTextFromFile } from '../services/parser.service.js'
 import { screenResumeWithAI } from '../services/ai.service.js'
-import { upsertResumeVector, matchJobToResumes } from '../services/vector.service.js'
-import { uploadToS3, getSignedDownloadUrl } from '../services/aws.service.js'
+import { uploadFile } from '../services/cloudinary.service.js'
 import fs from 'fs'
+import logger from '../config/logger.js'
 
 /**
  * POST /api/resume/screen
- * Upload a resume file + jobId → AI screening result
+ * Upload a resume file + jobId → AI screening result.
+ * LEGACY: Still supports manual file upload.
  */
 export const screenResume = async (req, res) => {
   const filePath = req.file?.path
@@ -29,24 +31,16 @@ export const screenResume = async (req, res) => {
       return res.status(422).json({ message: 'Could not extract enough text from the file' })
     }
 
-    // 3. Upload resume to S3 (private, access via signed URL)
-    let resumeS3Key  = null
-    let resumeUrl    = req.file.filename   // fallback: local name if S3 not configured
+    // 3. Upload resume to Cloudinary (or local fallback)
+    let resumePublicId = null
+    let resumeUrl      = req.file.filename   // fallback: local temp name
 
-    if (process.env.AWS_BUCKET_NAME || process.env.AWS_S3_BUCKET) {
-      try {
-        const s3Result  = await uploadToS3({
-          source:   filePath,
-          filename: req.file.originalname,
-          folder:   'resumes',
-          isPublic: false,
-        })
-        resumeS3Key = s3Result.key
-        resumeUrl   = await getSignedDownloadUrl(resumeS3Key, 3600)
-      } catch (s3Err) {
-        console.warn('[Resume Screen] S3 upload skipped:', s3Err.message)
-        // Non-blocking — continue with local filename
-      }
+    try {
+      const uploadResult = await uploadFile(filePath, 'resumes')
+      resumePublicId = uploadResult.publicId
+      resumeUrl      = uploadResult.url
+    } catch (uploadErr) {
+      console.warn('[Resume Screen] Upload skipped:', uploadErr.message)
     }
 
     // 4. Clean up temp disk file
@@ -67,16 +61,16 @@ export const screenResume = async (req, res) => {
       })
     }
 
-    candidate.resumeText   = resumeText.substring(0, 5000)
-    candidate.resumeUrl    = resumeUrl          // signed S3 URL (or local fallback)
-    candidate.resumeS3Key  = resumeS3Key        // raw key for future URL refresh
-    candidate.skills       = aiResult.skills || []
-    candidate.experience   = aiResult.experience || 0
-    candidate.resumeScore  = aiResult.score || 0
-    candidate.aiSummary    = aiResult.summary || ''
-    candidate.strengths    = aiResult.strengths || []
-    candidate.weaknesses   = aiResult.weaknesses || []
-    candidate.totalScore   = aiResult.score || 0
+    candidate.resumeText     = resumeText.substring(0, 5000)
+    candidate.resumeUrl      = resumeUrl
+    candidate.resumePublicId = resumePublicId
+    candidate.skills         = aiResult.skills || []
+    candidate.experience     = aiResult.experience || 0
+    candidate.resumeScore    = aiResult.score || 0
+    candidate.aiSummary      = aiResult.summary || ''
+    candidate.strengths      = aiResult.strengths || []
+    candidate.weaknesses     = aiResult.weaknesses || []
+    candidate.totalScore     = aiResult.score || 0
 
     if (aiResult.recommendation === 'hire' || aiResult.recommendation === 'interview') {
       candidate.status = 'screening'
@@ -84,15 +78,7 @@ export const screenResume = async (req, res) => {
 
     await candidate.save()
 
-    // 7. Upsert vector into Pinecone (async – don't block response)
-    upsertResumeVector(candidate._id, resumeText, {
-      name:   candidate.name,
-      email:  candidate.email,
-      skills: candidate.skills,
-      score:  candidate.resumeScore,
-    }).catch(console.error)
-
-    // 8. Increment job applicant count
+    // 7. Increment job applicant count
     await Job.findByIdAndUpdate(jobId, { $inc: { applicantCount: 1 } })
 
     res.status(201).json({
@@ -107,10 +93,109 @@ export const screenResume = async (req, res) => {
   }
 }
 
+/**
+ * POST /api/resume/screen-application
+ * Screen a candidate's resume that was already uploaded during application.
+ * No file upload needed — fetches resumeText from Application.
+ *
+ * Body: { applicationId }  or  { candidateId, jobId }
+ */
+export const screenFromApplication = async (req, res) => {
+  try {
+    const { applicationId, candidateId, jobId } = req.body
+
+    // Find the application
+    let application
+    if (applicationId) {
+      application = await Application.findById(applicationId)
+        .populate('candidate', 'name email')
+        .populate('job', 'title company description skills recruiter')
+    } else if (candidateId && jobId) {
+      application = await Application.findOne({ candidate: candidateId, job: jobId })
+        .populate('candidate', 'name email')
+        .populate('job', 'title company description skills recruiter')
+    }
+
+    if (!application) {
+      return res.status(404).json({ message: 'Application not found' })
+    }
+
+    // Verify recruiter owns this job
+    if (String(application.job.recruiter) !== String(req.user._id)) {
+      return res.status(403).json({ message: 'Access denied' })
+    }
+
+    // Check resume exists
+    if (!application.resumeText || application.resumeText.length < 50) {
+      return res.status(404).json({
+        message: 'No resume found for this candidate. They may not have uploaded one during application.',
+      })
+    }
+
+    // Build job description for AI
+    const job = application.job
+    const jobDescription = `${job.title} at ${job.company}.\n${job.description}\nRequired skills: ${job.skills?.join(', ')}`
+
+    // Run AI screening
+    const aiResult = await screenResumeWithAI(application.resumeText, jobDescription)
+
+    logger.info('[Resume] Screened from application', {
+      applicationId: application._id,
+      candidate:     application.candidate.name,
+      score:         aiResult.score,
+    })
+
+    // Update or create Candidate profile for score tracking
+    let candidate = await Candidate.findOne({
+      email: application.candidate.email,
+      job:   application.job._id,
+    })
+    if (!candidate) {
+      candidate = new Candidate({
+        name:      application.candidate.name,
+        email:     application.candidate.email,
+        job:       application.job._id,
+        createdBy: req.user._id,
+      })
+    }
+
+    candidate.resumeText     = application.resumeText.substring(0, 5000)
+    candidate.resumeUrl      = application.resumeUrl
+    candidate.resumePublicId = application.resumePublicId
+    candidate.skills         = aiResult.skills || []
+    candidate.experience     = aiResult.experience || 0
+    candidate.resumeScore    = aiResult.score || 0
+    candidate.aiSummary      = aiResult.summary || ''
+    candidate.strengths      = aiResult.strengths || []
+    candidate.weaknesses     = aiResult.weaknesses || []
+    candidate.totalScore     = aiResult.score || 0
+
+    await candidate.save()
+
+    // Update application status to 'screening'
+    if (application.status === 'applied') {
+      application.status = 'screening'
+      await application.save()
+    }
+
+    res.json({
+      candidate,
+      aiResult,
+      application: {
+        _id:    application._id,
+        status: application.status,
+      },
+      message: `Resume screened. Score: ${aiResult.score}/100`,
+    })
+  } catch (err) {
+    logger.error('[Resume] screenFromApplication failed', { error: err.message })
+    res.status(500).json({ message: err.message || 'Screening failed' })
+  }
+}
 
 /**
  * POST /api/resume/match
- * Match a job's description against all stored resume vectors
+ * Match a job's description against stored candidate data.
  */
 export const matchResumes = async (req, res) => {
   try {
@@ -118,21 +203,41 @@ export const matchResumes = async (req, res) => {
     const job = await Job.findById(jobId)
     if (!job) return res.status(404).json({ message: 'Job not found' })
 
-    const jobDescription = `${job.title}\n${job.description}\nSkills: ${job.skills?.join(', ')}`
-    const matches = await matchJobToResumes(jobDescription, topK)
+    const searchTerms = [
+      job.title,
+      ...(job.skills || []),
+    ].join(' ')
 
-    // Enrich with DB data
-    const ids = matches.map(m => m.candidateId)
-    const candidates = await Candidate.find({ _id: { $in: ids } })
-      .populate('job', 'title')
-      .lean()
+    let candidates
+    try {
+      candidates = await Candidate.find(
+        { $text: { $search: searchTerms } },
+        { score: { $meta: 'textScore' } }
+      )
+        .sort({ score: { $meta: 'textScore' } })
+        .limit(Number(topK))
+        .populate('job', 'title')
+        .lean()
+    } catch {
+      candidates = await Candidate.find({
+        $or: [
+          { skills: { $in: job.skills || [] } },
+          { resumeText: { $regex: job.title, $options: 'i' } },
+        ]
+      })
+        .sort({ resumeScore: -1 })
+        .limit(Number(topK))
+        .populate('job', 'title')
+        .lean()
+    }
 
-    const enriched = matches.map(m => ({
-      ...m,
-      candidate: candidates.find(c => c._id.toString() === m.candidateId),
-    })).filter(m => m.candidate)
+    const matches = candidates.map(c => ({
+      candidateId: c._id,
+      score: c.resumeScore || 0,
+      candidate: c,
+    }))
 
-    res.json({ matches: enriched, count: enriched.length })
+    res.json({ matches, count: matches.length })
   } catch (err) {
     res.status(500).json({ message: err.message })
   }

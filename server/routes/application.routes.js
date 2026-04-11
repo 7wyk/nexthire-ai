@@ -1,10 +1,12 @@
 import { Router } from 'express'
 import { protect, authorize } from '../middlewares/auth.middleware.js'
+import { upload } from '../config/multer.js'
 import {
   applyToJob,
   getMyApplications,
   withdrawApplication,
   getApplicantsByJob,
+  getApplicationResume,
   updateApplicationStatus,
 } from '../controllers/application.controller.js'
 
@@ -14,12 +16,14 @@ const router = Router()
 router.use(protect)
 
 // ── Candidate routes ─────────────────────────────────────────────────────────
-router.post('/',           authorize('candidate'), applyToJob)
+// POST with optional resume file upload (multipart/form-data)
+router.post('/',           authorize('candidate'), upload.single('resume'), applyToJob)
 router.get('/mine',        authorize('candidate'), getMyApplications)
 router.delete('/:id',      authorize('candidate'), withdrawApplication)
 
 // ── Recruiter routes ─────────────────────────────────────────────────────────
 router.get('/job/:jobId',          authorize('recruiter', 'admin'), getApplicantsByJob)
-router.patch('/:id/status',        authorize('recruiter', 'admin'), updateApplicationStatus)
+router.get('/:id/resume',         authorize('recruiter', 'admin'), getApplicationResume)
+router.patch('/:id/status',       authorize('recruiter', 'admin'), updateApplicationStatus)
 
 export default router

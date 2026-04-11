@@ -2,64 +2,71 @@
  * notification.socket.js
  * Real-time push notifications for recruiters & candidates.
  * Namespace: /notifications
+ *
+ * Auth: client connects with { auth: { token } }
+ * Server verifies JWT and auto-registers the user.
  */
+import jwt from 'jsonwebtoken'
 import logger from '../config/logger.js'
 
-// In-memory map: userId → socketId (for direct pushes)
+// In-memory map: userId → Set of socketIds (multi-tab support)
 const userSockets = new Map()
 
 export const registerNotificationSockets = (io) => {
   const ns = io.of('/notifications')
 
+  // ── JWT auth middleware on namespace ──────────────────────────────────────
+  ns.use((socket, next) => {
+    const token = socket.handshake.auth?.token
+    if (!token) return next(new Error('Authentication required'))
+
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET)
+      socket.data.userId = String(decoded.id)
+      socket.data.role   = decoded.role
+      next()
+    } catch {
+      next(new Error('Invalid token'))
+    }
+  })
+
   ns.on('connection', (socket) => {
-    logger.info('[Socket/Notify] Client connected', { socketId: socket.id })
+    const { userId, role } = socket.data
 
-    // ── Register user for direct notifications ────────────────────────────
-    socket.on('register', ({ userId }) => {
-      if (userId) {
-        userSockets.set(userId, socket.id)
-        socket.data.userId = userId
-        socket.join(`user:${userId}`)
-        logger.info('[Socket/Notify] User registered', { userId })
-      }
-    })
+    // Auto-join personal room (no manual register event needed)
+    socket.join(`user:${userId}`)
+    if (userId) {
+      if (!userSockets.has(userId)) userSockets.set(userId, new Set())
+      userSockets.get(userId).add(socket.id)
+    }
 
-    // ── Alias: notify-user → pushToUser logic ────────────────────────────
-    // Compatibility alias for simple clients. Delegates to the same
-    // room-emit pattern used by the exported pushToUser() helper.
-    // Payload: { targetUserId, event, message, [meta] }
-    socket.on('notify-user', ({ targetUserId, event = 'notification', message, meta }) => {
-      if (!targetUserId) return
-      ns.to(`user:${targetUserId}`).emit(event, {
-        message,
-        meta,
-        timestamp: new Date().toISOString(),
-      })
-      logger.info('[Socket/Notify] notify-user alias fired', { targetUserId, event })
-    })
+    logger.info('[Socket/Notify] User connected', { userId, role, socketId: socket.id })
 
-    // ── Utility: push to specific user ────────────────────────────────────
     socket.on('disconnect', () => {
-      const { userId } = socket.data || {}
-      if (userId) userSockets.delete(userId)
-      logger.info('[Socket/Notify] Client disconnected', { socketId: socket.id })
+      if (userId && userSockets.has(userId)) {
+        userSockets.get(userId).delete(socket.id)
+        if (userSockets.get(userId).size === 0) userSockets.delete(userId)
+      }
+      logger.info('[Socket/Notify] User disconnected', { userId, socketId: socket.id })
     })
   })
 
-  // ── Exported helpers (called from controllers) ────────────────────────────
+  // ── Exported helpers called from controllers ──────────────────────────────
 
   /**
-   * Push a notification to a specific user regardless of socket.
+   * Push event to a specific user (by userId string).
+   * Works across multiple browser tabs.
    */
   const pushToUser = (userId, event, payload) => {
     ns.to(`user:${userId}`).emit(event, {
       ...payload,
       timestamp: new Date().toISOString(),
     })
+    logger.info('[Socket/Notify] pushToUser', { userId, event })
   }
 
   /**
-   * Broadcast to all connected recruiters.
+   * Broadcast to all connected users in the namespace.
    */
   const broadcastToRecruiters = (event, payload) => {
     ns.emit(event, { ...payload, timestamp: new Date().toISOString() })

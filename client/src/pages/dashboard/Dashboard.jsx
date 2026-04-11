@@ -4,9 +4,12 @@ import { Link } from 'react-router-dom'
 import {
   Users, Briefcase, FileText, Trophy, TrendingUp,
   Clock, ArrowRight, Zap, Code2, MessageSquare,
-  CheckCircle, AlertCircle, BarChart3
+  BarChart3, Search, ClipboardList, Wand2
 } from 'lucide-react'
 import api from '../../services/api'
+import { useAuthStore } from '../../store/authStore'
+
+// ── Sub-components ──────────────────────────────────────────────────────────
 
 const StatCard = ({ icon: Icon, label, value, change, color, bg, delay }) => (
   <motion.div
@@ -33,7 +36,8 @@ const PipelineBar = ({ label, count, total, color }) => (
     <span className="text-slate-400 text-xs w-20 capitalize">{label}</span>
     <div className="flex-1 h-2 bg-surface-600 rounded-full overflow-hidden">
       <motion.div
-        initial={{ width: 0 }} animate={{ width: total > 0 ? `${(count / total) * 100}%` : '0%' }}
+        initial={{ width: 0 }}
+        animate={{ width: total > 0 ? `${(count / total) * 100}%` : '0%' }}
         transition={{ duration: 0.8, ease: 'easeOut' }}
         className={`h-full ${color} rounded-full`}
       />
@@ -42,7 +46,62 @@ const PipelineBar = ({ label, count, total, color }) => (
   </div>
 )
 
-export default function Dashboard() {
+// ── Candidate Dashboard ──────────────────────────────────────────────────────
+
+function CandidateDashboard({ user }) {
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="card">
+        <h2 className="text-xl font-bold text-white mb-1">Welcome back, {user.name}! 👋</h2>
+        <p className="text-slate-400 text-sm">Explore open positions and track your applications below.</p>
+      </motion.div>
+
+      {/* Primary actions */}
+      <div className="grid sm:grid-cols-2 gap-4">
+        <Link to="/public-jobs"
+          className="card group flex items-center gap-4 bg-gradient-to-br from-primary-600 to-indigo-700 border-0 hover:scale-[1.02] transition-transform duration-200">
+          <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
+            <Search className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <p className="text-white font-semibold">Browse Jobs</p>
+            <p className="text-white/70 text-xs">Find and apply to open positions</p>
+          </div>
+          <ArrowRight size={16} className="text-white/60 ml-auto group-hover:translate-x-1 transition-transform" />
+        </Link>
+
+        <Link to="/my-applications"
+          className="card group flex items-center gap-4 bg-gradient-to-br from-emerald-600 to-teal-700 border-0 hover:scale-[1.02] transition-transform duration-200">
+          <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
+            <ClipboardList className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <p className="text-white font-semibold">My Applications</p>
+            <p className="text-white/70 text-xs">Track your application statuses</p>
+          </div>
+          <ArrowRight size={16} className="text-white/60 ml-auto group-hover:translate-x-1 transition-transform" />
+        </Link>
+      </div>
+
+      {/* Secondary action — coding sandbox (neutral tool) */}
+      <div className="grid grid-cols-1 gap-3">
+        <Link to="/coding"
+          className="card group flex items-center gap-3 bg-gradient-to-br from-purple-600 to-pink-700 border-0 hover:scale-[1.02] transition-transform duration-200">
+          <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
+            <Code2 className="w-5 h-5 text-white" />
+          </div>
+          <span className="text-white font-semibold text-sm">Coding Sandbox</span>
+          <ArrowRight size={15} className="text-white/60 ml-auto group-hover:translate-x-1 transition-transform" />
+        </Link>
+      </div>
+    </div>
+  )
+}
+
+
+// ── Recruiter Dashboard ──────────────────────────────────────────────────────
+
+function RecruiterDashboard() {
   const [stats, setStats] = useState({
     jobs: 0, candidates: 0, screened: 0, shortlisted: 0,
     pipeline: { applied: 0, screening: 0, interview: 0, shortlisted: 0, hired: 0, rejected: 0 }
@@ -84,10 +143,10 @@ export default function Dashboard() {
   }, [])
 
   const statCards = [
-    { icon: Briefcase,  label: 'Active Jobs',       value: stats.jobs,        change: 'Live postings',   color: 'text-blue-400',    bg: 'bg-blue-500/10',    delay: 0 },
-    { icon: Users,      label: 'Total Candidates',  value: stats.candidates,  change: 'All time',        color: 'text-purple-400',  bg: 'bg-purple-500/10',  delay: 0.08 },
-    { icon: FileText,   label: 'Resumes Screened',  value: stats.screened,    change: 'By Groq AI',      color: 'text-emerald-400', bg: 'bg-emerald-500/10', delay: 0.16 },
-    { icon: Trophy,     label: 'Shortlisted',       value: stats.shortlisted, change: 'Ready to hire',   color: 'text-amber-400',   bg: 'bg-amber-500/10',   delay: 0.24 },
+    { icon: Briefcase, label: 'Active Jobs',      value: stats.jobs,        change: 'Live postings',  color: 'text-blue-400',    bg: 'bg-blue-500/10',    delay: 0 },
+    { icon: Users,     label: 'Total Candidates', value: stats.candidates,  change: 'All time',       color: 'text-purple-400',  bg: 'bg-purple-500/10',  delay: 0.08 },
+    { icon: FileText,  label: 'Resumes Screened', value: stats.screened,    change: 'By Groq AI',     color: 'text-emerald-400', bg: 'bg-emerald-500/10', delay: 0.16 },
+    { icon: Trophy,    label: 'Shortlisted',      value: stats.shortlisted, change: 'Ready to hire',  color: 'text-amber-400',   bg: 'bg-amber-500/10',   delay: 0.24 },
   ]
 
   const pipelineConfig = [
@@ -189,10 +248,10 @@ export default function Dashboard() {
       {/* Quick Actions */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { icon: Zap,          label: 'Screen Resume', link: '/resume-ai',  cls: 'from-primary-600 to-indigo-700' },
-          { icon: Code2,        label: 'Coding IDE',    link: '/coding',     cls: 'from-purple-600 to-pink-700' },
-          { icon: MessageSquare,label: 'AI Interview',  link: '/interview',  cls: 'from-emerald-600 to-teal-700' },
-          { icon: Trophy,       label: 'Rankings',      link: '/ranking',    cls: 'from-amber-600 to-orange-700' },
+          { icon: Zap,    label: 'Screen Resume', link: '/resume-ai',          cls: 'from-primary-600 to-indigo-700' },
+          { icon: Wand2,  label: 'Create Test',   link: '/create-coding-test', cls: 'from-purple-600 to-pink-700'   },
+          { icon: MessageSquare, label: 'AI Interview', link: '/interview',    cls: 'from-emerald-600 to-teal-700'  },
+          { icon: Trophy, label: 'Rankings',      link: '/ranking',            cls: 'from-amber-600 to-orange-700'  },
         ].map(a => (
           <Link key={a.label} to={a.link}
             className={`card group flex items-center gap-3 bg-gradient-to-br ${a.cls} border-0 hover:scale-[1.02] transition-transform duration-200`}>
@@ -236,4 +295,16 @@ export default function Dashboard() {
       )}
     </div>
   )
+}
+
+// ── Main export — picks correct dashboard by role ────────────────────────────
+
+export default function Dashboard() {
+  const { user } = useAuthStore()
+
+  if (user?.role === 'candidate') {
+    return <CandidateDashboard user={user} />
+  }
+
+  return <RecruiterDashboard />
 }

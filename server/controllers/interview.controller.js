@@ -1,6 +1,9 @@
 import InterviewSession from '../models/InterviewSession.js'
+import User from '../models/User.js'
 import Candidate from '../models/Candidate.js'
+import Application from '../models/Application.js'
 import Job from '../models/Job.js'
+import logger from '../config/logger.js'
 import {
   startInterview, continueInterview,
   evaluateAnswer, generateInterviewSummary
@@ -10,22 +13,60 @@ import {
 export const createSession = async (req, res) => {
   try {
     const { candidateId, jobId } = req.body
-    const [candidate, job] = await Promise.all([
-      Candidate.findById(candidateId),
-      Job.findById(jobId),
-    ])
+
+    logger.info('[Interview] createSession — request received', { candidateId, jobId })
+
+    if (!candidateId) return res.status(400).json({ message: 'Candidate ID is required' })
+    if (!jobId)       return res.status(400).json({ message: 'Job ID is required' })
+
+    // Primary lookup: User collection (candidateId is a User._id)
+    // Fallback: also try matching by email in case frontend sends email
+    let candidate = await User.findOne({ _id: candidateId, role: 'candidate' }).lean()
+    if (!candidate) {
+      candidate = await User.findOne({ email: candidateId, role: 'candidate' }).lean()
+    }
+
+    logger.info('[Interview] Candidate lookup result', {
+      found: !!candidate,
+      candidateId,
+      candidateName: candidate?.name || null,
+    })
+
     if (!candidate) return res.status(404).json({ message: 'Candidate not found' })
-    if (!job)       return res.status(404).json({ message: 'Job not found' })
+
+    const job = await Job.findById(jobId)
+    if (!job) return res.status(404).json({ message: 'Job not found' })
+
+    // Fetch resume from Application (single source of truth)
+    const application = await Application.findOne({
+      candidate: candidate._id,
+      job: jobId,
+    }).select('resumeText').lean()
+
+    // Fallback: try Candidate profile (populated by manual resume screening)
+    const candidateProfile = await Candidate.findOne({ createdBy: candidate._id })
+      .sort({ resumeScore: -1 })
+      .select('resumeText skills')
+      .lean()
+
+    const resumeText   = application?.resumeText || candidateProfile?.resumeText || ''
+    const resumeSkills = candidateProfile?.skills || []
+
+    logger.info('[Interview] Resume context', {
+      fromApplication: !!application?.resumeText,
+      fromCandidate:   !!candidateProfile?.resumeText,
+      textLength:      resumeText.length,
+    })
 
     // Generate opening question from AI
     const opening = await startInterview({
       jobTitle: job.title,
-      resumeText: candidate.resumeText,
-      resumeSkills: candidate.skills,
+      resumeText,
+      resumeSkills,
     })
 
     const session = await InterviewSession.create({
-      candidate: candidateId,
+      candidate: candidate._id,
       job: jobId,
       recruiter: req.user._id,
       jobTitle: job.title,
@@ -35,11 +76,23 @@ export const createSession = async (req, res) => {
       questionCount: 1,
     })
 
-    await Candidate.findByIdAndUpdate(candidateId, { status: 'interview' })
+    // Update candidate profile status if it exists
+    await Candidate.updateMany({ createdBy: candidate._id }, { status: 'interview' })
 
-    res.status(201).json({ session })
+    // Populate for the response
+    const populated = await InterviewSession.findById(session._id)
+      .populate('candidate', 'name email')
+      .populate('job', 'title company')
+
+    logger.info('[Interview] Session created successfully', {
+      sessionId: session._id,
+      candidateName: candidate.name,
+      jobTitle: job.title,
+    })
+
+    res.status(201).json({ session: populated })
   } catch (err) {
-    console.error('[Interview createSession]', err)
+    logger.error('[Interview] createSession failed', { error: err.message, stack: err.stack })
     res.status(500).json({ message: err.message })
   }
 }
@@ -49,13 +102,30 @@ export const sendMessage = async (req, res) => {
   try {
     const { content } = req.body
     const session = await InterviewSession.findById(req.params.id)
-      .populate('candidate', 'resumeText skills name')
+      .populate('candidate', 'name email')
       .populate('job', 'title')
 
     if (!session) return res.status(404).json({ message: 'Session not found' })
     if (session.status !== 'active') {
       return res.status(400).json({ message: 'Interview session is not active' })
     }
+
+    // Load resume from Application (single source of truth), then Candidate as fallback
+    const candidateUserId = session.candidate._id || session.candidate
+    const jobId = session.job?._id || session.job
+
+    const application = await Application.findOne({
+      candidate: candidateUserId,
+      job: jobId,
+    }).select('resumeText').lean()
+
+    const candidateProfile = await Candidate.findOne({ createdBy: candidateUserId })
+      .sort({ resumeScore: -1 })
+      .select('resumeText skills resumeScore codeScore interviewScore')
+      .lean()
+
+    // Merge: Application resume takes priority
+    const mergedResumeText = application?.resumeText || candidateProfile?.resumeText || ''
 
     // Add candidate message
     const candidateMsg = { role: 'candidate', content, timestamp: new Date() }
@@ -90,8 +160,8 @@ export const sendMessage = async (req, res) => {
       // Generate next interviewer message
       nextMsg = await continueInterview({
         jobTitle: session.job?.title || session.jobTitle,
-        resumeText: session.candidate?.resumeText,
-        resumeSkills: session.candidate?.skills,
+        resumeText: mergedResumeText,
+        resumeSkills: candidateProfile?.skills || [],
         messages: session.messages,
         questionCount: session.questionCount,
       })
@@ -119,22 +189,23 @@ export const sendMessage = async (req, res) => {
         session.concerns             = summary.concerns || []
         session.recommendation       = summary.recommendation || 'pending'
 
-        // Update candidate interview score
+        // Update candidate interview score in Candidate profile (if exists)
         const interviewScore = summary.overall || 0
-        const candidate = await Candidate.findById(session.candidate._id || session.candidate)
-        if (candidate) {
-          candidate.interviewScore = interviewScore
-          candidate.totalScore = Math.round(
-            (candidate.resumeScore   * 0.4) +
-            (candidate.codeScore     * 0.3) +
-            (interviewScore          * 0.3)
+        const candidateDoc = await Candidate.findOne({ createdBy: candidateUserId })
+          .sort({ resumeScore: -1 })
+        if (candidateDoc) {
+          candidateDoc.interviewScore = interviewScore
+          candidateDoc.totalScore = Math.round(
+            (candidateDoc.resumeScore   * 0.4) +
+            (candidateDoc.codeScore     * 0.3) +
+            (interviewScore             * 0.3)
           )
-          if (summary.recommendation === 'hire') candidate.status = 'shortlisted'
-          else if (summary.recommendation === 'reject') candidate.status = 'rejected'
-          await candidate.save()
+          if (summary.recommendation === 'hire') candidateDoc.status = 'shortlisted'
+          else if (summary.recommendation === 'reject') candidateDoc.status = 'rejected'
+          await candidateDoc.save()
         }
       } catch (e) {
-        console.error('[Interview summary]', e.message)
+        logger.error('[Interview summary]', { error: e.message })
       }
     }
 
@@ -170,7 +241,7 @@ export const getSessions = async (req, res) => {
 export const getSession = async (req, res) => {
   try {
     const session = await InterviewSession.findById(req.params.id)
-      .populate('candidate', 'name email skills resumeScore codeScore')
+      .populate('candidate', 'name email')
       .populate('job', 'title company')
     if (!session) return res.status(404).json({ message: 'Session not found' })
     res.json({ session })

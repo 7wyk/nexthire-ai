@@ -22,6 +22,7 @@ import codeRoutes from './routes/code.routes.js'
 import interviewRoutes from './routes/interview.routes.js'
 import aiRoutes from './routes/ai.routes.js'
 import uploadRoutes from './routes/upload.routes.js'
+import codingTestRoutes from './routes/codingTest.routes.js'
 
 
 // ── App bootstrap ──────────────────────────────────────────────────────────
@@ -78,6 +79,9 @@ const authLimiter = rateLimit({
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 
+// Serve uploaded files (local fallback when Cloudinary not configured)
+app.use('/uploads', express.static('uploads'))
+
 // Morgan → Winston
 app.use(morgan('combined', { stream: logger.stream }))
 
@@ -97,6 +101,7 @@ app.use('/api/code', codeRoutes)
 app.use('/api/interview', interviewRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api/upload', uploadRoutes)
+app.use('/api/coding-test', codingTestRoutes)
 
 // ── Health Check ───────────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {

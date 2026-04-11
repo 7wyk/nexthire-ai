@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { protect } from '../middlewares/auth.middleware.js'
+import { protect, authorize } from '../middlewares/auth.middleware.js'
 import { upload }  from '../config/multer.js'
 import {
   parseResume,
@@ -13,18 +13,15 @@ const router = Router()
 router.use(protect)
 
 // ── POST /api/ai/parse-resume ─────────────────────────────────────────────────
-// multipart/form-data  |  field: "resume"  |  PDF / DOC / DOCX / TXT (max 5 MB)
-// Returns extracted plain text — no AI, no DB write.
-router.post('/parse-resume', upload.single('resume'), parseResume)
+// Recruiter only: PDF / DOC / DOCX / TXT (max 5 MB) — extracts plain text.
+router.post('/parse-resume', authorize('recruiter', 'admin'), upload.single('resume'), parseResume)
 
 // ── POST /api/ai/score-resume ─────────────────────────────────────────────────
-// application/json  |  { resumeText, jobTitle?, jobDescription? }
-// Sends to Groq LLM → returns score 0-100, skills, strengths, weaknesses, recommendation.
-router.post('/score-resume', scoreResume)
+// Recruiter only: { resumeText, jobTitle?, jobDescription? } → score 0-100.
+router.post('/score-resume', authorize('recruiter', 'admin'), scoreResume)
 
 // ── POST /api/ai/generate-questions ──────────────────────────────────────────
-// application/json  |  { resumeText, jobTitle, jobDescription?, round? }
-// Generates 5 targeted interview questions with category + difficulty.
-router.post('/generate-questions', generateQuestions)
+// Recruiter only: { resumeText, jobTitle, jobDescription?, round? } → 5 questions.
+router.post('/generate-questions', authorize('recruiter', 'admin'), generateQuestions)
 
 export default router

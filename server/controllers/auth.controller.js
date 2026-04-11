@@ -35,10 +35,14 @@ export const register = async (req, res) => {
     if (!name || !email || !password)
       return res.status(400).json({ message: 'Name, email and password are required' })
 
+    // Prevent self-assigning admin role via API
+    const allowedRoles = ['recruiter', 'candidate']
+    const safeRole = allowedRoles.includes(role) ? role : 'candidate'
+
     const exists = await User.findOne({ email })
     if (exists) return res.status(409).json({ message: 'Email already registered' })
 
-    const user = await User.create({ name, email, password, role, company })
+    const user = await User.create({ name, email, password, role: safeRole, company })
 
     const accessToken  = generateAccessToken(user)
     const refreshToken = generateRefreshToken(user)
@@ -183,3 +187,88 @@ export const getMe = async (req, res) => {
     }
   })
 }
+
+// ── POST /api/auth/forgot-password ─────────────────────────────────────────
+// Generates a 1-hour reset token and logs the link (console mode — no SMTP)
+export const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body
+    if (!email) return res.status(400).json({ message: 'Email is required' })
+
+    const user = await User.findOne({ email }).select('+resetToken +resetTokenExpiry')
+    // Always return 200 so we don't leak user existence
+    if (!user) return res.json({ message: 'If that email exists, a reset link has been sent.' })
+
+    // Generate a random 32-byte hex token
+    const rawToken = crypto.randomBytes(32).toString('hex')
+    user.resetToken       = crypto.createHash('sha256').update(rawToken).digest('hex')
+    user.resetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
+    await user.save({ validateBeforeSave: false })
+
+    const resetUrl = `${process.env.CLIENT_URL}/reset-password/${rawToken}`
+
+    // Console-log mode (replace with nodemailer/resend in production)
+    logger.info('[Auth] Password reset link generated', { email, resetUrl })
+    console.log('\n🔑 PASSWORD RESET LINK (dev mode):', resetUrl, '\n')
+
+    res.json({ message: 'If that email exists, a reset link has been sent.' })
+  } catch (err) {
+    logger.error('[Auth] forgotPassword failed', { error: err.message })
+    res.status(500).json({ message: err.message })
+  }
+}
+
+// ── POST /api/auth/reset-password ──────────────────────────────────────────
+// Body: { token, password }
+export const resetPassword = async (req, res) => {
+  try {
+    const { token, password } = req.body
+    if (!token || !password) return res.status(400).json({ message: 'Token and password are required' })
+    if (password.length < 8)  return res.status(400).json({ message: 'Password must be at least 8 characters' })
+
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex')
+
+    const user = await User.findOne({
+      resetToken:       hashedToken,
+      resetTokenExpiry: { $gt: Date.now() },
+    }).select('+resetToken +resetTokenExpiry')
+
+    if (!user) return res.status(400).json({ message: 'Invalid or expired reset token' })
+
+    user.password         = password   // pre-save hook hashes it
+    user.resetToken       = undefined
+    user.resetTokenExpiry = undefined
+    user.loginAttempts    = 0
+    user.lockUntil        = undefined
+    await user.save()
+
+    logger.info('[Auth] Password reset successful', { userId: user._id })
+    res.json({ message: 'Password reset successful. You can now log in.' })
+  } catch (err) {
+    logger.error('[Auth] resetPassword failed', { error: err.message })
+    res.status(500).json({ message: err.message })
+  }
+}
+
+// ── GET /api/auth/verify-email/:token ──────────────────────────────────────
+// Marks the user's email as verified
+export const verifyEmail = async (req, res) => {
+  try {
+    const hashedToken = crypto.createHash('sha256').update(req.params.token).digest('hex')
+
+    const user = await User.findOne({ verifyToken: hashedToken }).select('+verifyToken')
+    if (!user) return res.status(400).json({ message: 'Invalid or expired verification link' })
+
+    user.isEmailVerified = true
+    user.verifyToken     = undefined
+    await user.save({ validateBeforeSave: false })
+
+    logger.info('[Auth] Email verified', { userId: user._id })
+    // Redirect to login with success message
+    res.redirect(`${process.env.CLIENT_URL}/login?verified=1`)
+  } catch (err) {
+    logger.error('[Auth] verifyEmail failed', { error: err.message })
+    res.status(500).json({ message: err.message })
+  }
+}
+

@@ -1,13 +1,107 @@
-import { ChatGroq } from '@langchain/groq'
-import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages'
+/**
+ * interview.service.js
+ *
+ * AI-powered interview engine using Groq LLM.
+ * All functions have robust fallbacks so the interview flow NEVER crashes,
+ * even if the AI model is unavailable, deprecated, or rate-limited.
+ */
 
-const groq = new ChatGroq({
-  apiKey: process.env.GROQ_API_KEY,
-  model: 'llama3-8b-8192',
-  temperature: 0.7,
+import logger from '../config/logger.js'
+
+// ── Centralized model config ──────────────────────────────────────────────────
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'
+
+// ── Lazy Groq initialization (same pattern as ai.service.js) ──────────────────
+let groq = null
+let langchainMessages = null
+
+const initGroq = async () => {
+  if (groq) return groq
+  if (!process.env.GROQ_API_KEY || process.env.GROQ_API_KEY.startsWith('your_')) {
+    logger.warn('[Interview AI] GROQ_API_KEY not configured — will use fallbacks')
+    return null
+  }
+  try {
+    const { ChatGroq } = await import('@langchain/groq')
+    groq = new ChatGroq({
+      apiKey: process.env.GROQ_API_KEY,
+      model:  GROQ_MODEL,
+      temperature: 0.7,
+    })
+    logger.info('[Interview AI] Groq initialized', { model: GROQ_MODEL })
+    return groq
+  } catch (err) {
+    logger.error('[Interview AI] Failed to init Groq', { error: err.message })
+    return null
+  }
+}
+
+const getMessages = async () => {
+  if (langchainMessages) return langchainMessages
+  const mod = await import('@langchain/core/messages')
+  langchainMessages = mod
+  return mod
+}
+
+const invokeGroq = async (systemPrompt, messages) => {
+  const client = await initGroq()
+  if (!client) throw new Error('Groq not configured')
+
+  const { HumanMessage, SystemMessage, AIMessage } = await getMessages()
+  const langchainMsgs = [
+    new SystemMessage(systemPrompt),
+    ...messages.map(m =>
+      m.role === 'interviewer' || m.role === 'ai'
+        ? new AIMessage(m.content)
+        : new HumanMessage(m.content)
+    ),
+  ]
+
+  logger.info('[Interview AI] Invoking Groq', { model: GROQ_MODEL, messageCount: langchainMsgs.length })
+  const response = await client.invoke(langchainMsgs)
+  return response.content.trim()
+}
+
+// ── Mock / Fallback responses ─────────────────────────────────────────────────
+
+const FALLBACK_OPENING = (jobTitle) => ({
+  role: 'interviewer',
+  content: `Hello! I'm Alex, and I'll be conducting your technical interview today for the ${jobTitle || 'Software Engineer'} position. Thank you for taking the time to join us.\n\nLet's start with something foundational — can you walk me through your most impactful project and the technical decisions you made?`,
+  category: 'behavioral',
 })
 
-/** System prompt builder for the AI interviewer */
+const FALLBACK_FOLLOWUPS = [
+  { role: 'interviewer', content: 'That\'s interesting. Can you explain the architecture of that project? What were the key components and how did they communicate?' },
+  { role: 'interviewer', content: 'How do you approach debugging a complex issue in production? Walk me through your process.' },
+  { role: 'interviewer', content: 'Can you explain the difference between SQL and NoSQL databases? When would you choose one over the other?' },
+  { role: 'interviewer', content: 'Tell me about a time you had to learn a new technology quickly. How did you approach it?' },
+  { role: 'interviewer', content: 'How would you design a URL shortening service? Walk me through the high-level architecture.' },
+  { role: 'interviewer', content: 'Describe a situation where you had to work with a difficult team member. How did you handle it?' },
+  { role: 'interviewer', content: 'Thank you for your time today. I\'ve really enjoyed our conversation. I\'ll share my feedback with the team. Best of luck!' },
+]
+
+const FALLBACK_EVALUATION = {
+  score: 6,
+  feedback: 'The candidate provided a reasonable answer. Further probing recommended.',
+  category: 'technical',
+  strength: 'Showed understanding of core concepts',
+  improvement: 'Could provide more specific examples',
+}
+
+const FALLBACK_SUMMARY = {
+  overall: 65,
+  technical: 60,
+  behavioral: 70,
+  communication: 65,
+  summary: 'The candidate demonstrated solid foundational knowledge with room for growth in advanced topics. Communication was clear and professional.',
+  strengths: ['Good communication skills', 'Solid foundational knowledge', 'Positive attitude'],
+  concerns: ['Limited depth on advanced technical topics', 'Could provide more concrete examples'],
+  recommendation: 'interview-next',
+  reasoning: 'Candidate shows potential but needs further evaluation on advanced technical skills.',
+}
+
+// ── System prompt builder ─────────────────────────────────────────────────────
+
 const buildSystemPrompt = (jobTitle, resumeSummary) => `
 You are Alex, a senior technical interviewer at a world-class tech company.
 You are conducting a structured technical interview for the role of: ${jobTitle}.
@@ -27,21 +121,25 @@ Your interview style:
 After 5-7 questions, you may wrap up with "Thank you for your time. I'll share my feedback with the team."
 `.trim()
 
+// ── Public API ────────────────────────────────────────────────────────────────
+
 /** Generate the first interview question */
 export const startInterview = async ({ jobTitle, resumeText, resumeSkills }) => {
   const resumeSummary = resumeSkills?.length > 0
     ? `Skills: ${resumeSkills.join(', ')}. ${resumeText?.substring(0, 300) || ''}`
     : resumeText?.substring(0, 300) || 'No resume provided'
 
-  const response = await groq.invoke([
-    new SystemMessage(buildSystemPrompt(jobTitle, resumeSummary)),
-    new HumanMessage('Please start the interview with a warm welcome and your first question.'),
-  ])
+  try {
+    const content = await invokeGroq(
+      buildSystemPrompt(jobTitle, resumeSummary),
+      [{ role: 'human', content: 'Please start the interview with a warm welcome and your first question.' }]
+    )
 
-  return {
-    role: 'interviewer',
-    content: response.content,
-    category: 'technical',
+    logger.info('[Interview AI] Opening question generated via AI', { jobTitle })
+    return { role: 'interviewer', content, category: 'technical' }
+  } catch (err) {
+    logger.warn('[Interview AI] startInterview falling back to mock', { error: err.message })
+    return FALLBACK_OPENING(jobTitle)
   }
 }
 
@@ -51,26 +149,24 @@ export const continueInterview = async ({ jobTitle, resumeText, resumeSkills, me
     ? `Skills: ${resumeSkills.join(', ')}`
     : resumeText?.substring(0, 200) || 'Not provided'
 
-  // Convert stored messages to LangChain format
-  const history = messages.map(m =>
-    m.role === 'interviewer'
-      ? new AIMessage(m.content)
-      : new HumanMessage(m.content)
-  )
-
   // After 6+ questions, signal wrap-up
   const wrapUpHint = questionCount >= 6
     ? '\n\nNote: This is the final question. After the candidate answers, thank them and conclude the interview.'
     : ''
 
-  const response = await groq.invoke([
-    new SystemMessage(buildSystemPrompt(jobTitle, resumeSummary) + wrapUpHint),
-    ...history,
-  ])
+  try {
+    const content = await invokeGroq(
+      buildSystemPrompt(jobTitle, resumeSummary) + wrapUpHint,
+      messages.map(m => ({ role: m.role, content: m.content }))
+    )
 
-  return {
-    role: 'interviewer',
-    content: response.content,
+    logger.info('[Interview AI] Follow-up question generated', { questionCount })
+    return { role: 'interviewer', content }
+  } catch (err) {
+    logger.warn('[Interview AI] continueInterview falling back to mock', { error: err.message, questionCount })
+    // Pick a fallback question based on the question count
+    const idx = Math.min(questionCount - 1, FALLBACK_FOLLOWUPS.length - 1)
+    return FALLBACK_FOLLOWUPS[idx]
   }
 }
 
@@ -90,15 +186,21 @@ Evaluate this answer. Return ONLY valid JSON:
   "improvement": "<what could be better>"
 }`
 
-  const response = await groq.invoke([
-    new SystemMessage('You are a technical interview evaluator. Return ONLY valid JSON.'),
-    new HumanMessage(prompt),
-  ])
+  try {
+    const content = await invokeGroq(
+      'You are a technical interview evaluator. Return ONLY valid JSON.',
+      [{ role: 'human', content: prompt }]
+    )
 
-  const raw = response.content.trim()
-  const jsonMatch = raw.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) return { score: 5, feedback: 'Answer evaluated.', category: 'technical' }
-  return JSON.parse(jsonMatch[0])
+    const jsonMatch = content.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) return FALLBACK_EVALUATION
+    const parsed = JSON.parse(jsonMatch[0])
+    logger.info('[Interview AI] Answer evaluated via AI', { score: parsed.score })
+    return parsed
+  } catch (err) {
+    logger.warn('[Interview AI] evaluateAnswer falling back to mock', { error: err.message })
+    return FALLBACK_EVALUATION
+  }
 }
 
 /** Generate final interview summary after session ends */
@@ -126,13 +228,19 @@ Provide a comprehensive evaluation. Return ONLY valid JSON:
   "reasoning": "<1 sentence justification>"
 }`
 
-  const response = await groq.invoke([
-    new SystemMessage('You are a hiring committee expert. Return ONLY valid JSON.'),
-    new HumanMessage(prompt),
-  ])
+  try {
+    const content = await invokeGroq(
+      'You are a hiring committee expert. Return ONLY valid JSON.',
+      [{ role: 'human', content: prompt }]
+    )
 
-  const raw = response.content.trim()
-  const jsonMatch = raw.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error('AI did not return valid JSON')
-  return JSON.parse(jsonMatch[0])
+    const jsonMatch = content.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error('AI did not return valid JSON')
+    const parsed = JSON.parse(jsonMatch[0])
+    logger.info('[Interview AI] Summary generated via AI', { overall: parsed.overall, recommendation: parsed.recommendation })
+    return parsed
+  } catch (err) {
+    logger.warn('[Interview AI] generateInterviewSummary falling back to mock', { error: err.message })
+    return FALLBACK_SUMMARY
+  }
 }

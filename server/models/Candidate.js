@@ -7,10 +7,9 @@ const candidateSchema = new mongoose.Schema({
   location: { type: String },
 
   // Resume
-  resumeUrl:    { type: String },     // pre-signed S3 URL (short-lived, for display)
-  resumeS3Key:  { type: String },     // raw S3 object key — use to regenerate signed URLs
-  resumeText:   { type: String },     // extracted raw text
-  vectorId:     { type: String },     // Pinecone vector ID
+  resumeUrl:      { type: String },   // Cloudinary secure URL or local path
+  resumePublicId: { type: String },   // Cloudinary public_id (or local path for fallback)
+  resumeText:     { type: String },   // extracted raw text
 
   // Skills & background
   skills: [{ type: String }],
@@ -42,5 +41,12 @@ const candidateSchema = new mongoose.Schema({
   job: { type: mongoose.Schema.Types.ObjectId, ref: 'Job' },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true })
+
+// Text index for free MongoDB-based resume matching
+candidateSchema.index({ resumeText: 'text', skills: 'text', name: 'text' })
+
+// Compound index for fast lookups
+candidateSchema.index({ email: 1, job: 1 })
+candidateSchema.index({ createdBy: 1, resumeScore: -1 })
 
 export default mongoose.model('Candidate', candidateSchema)
